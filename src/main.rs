@@ -2,7 +2,7 @@
 //! Toy Entity Component System using various methods to schedule systems
 //! 
 
-use std::{io::Stdout, sync::{Arc, RwLock}};
+use std::{io::Stdout, sync::{Arc, RwLock}, time::{SystemTime, UNIX_EPOCH}};
 use std::io::{stdout, Result};
 use std::time::Duration;
 
@@ -110,6 +110,14 @@ fn canvas_render_system(
     world: Arc<World>,
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
 ) -> Result<()> {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+    let then = *world.last_render.read().unwrap();
+    *world.last_render.write().unwrap() = now;
+    let frame_rate = if now - then == 0 {
+        60
+    } else {
+        1000 / (now - then)
+    };
     terminal.draw(|frame| {
         let area = frame.size();
         frame.render_widget(
@@ -119,10 +127,12 @@ fn canvas_render_system(
                     .borders(Borders::ALL)
                     .title(
                         format!(
-                            "Living Entities: {}",
-                            (*world.living_entities.read().unwrap()))
+                            "Living Entities: {} ----- ({} fps)",
+                            (*world.living_entities.read().unwrap()),
+                            frame_rate,
                         )
                     )
+                )
                 .background_color(Color::Black)
                 .x_bounds([0.0, WIDTH as f64])
                 .y_bounds([0.0, HEIGHT as f64])
@@ -231,6 +241,8 @@ fn user_input_system(
 pub struct World {
     // Whether the simulation is running
     running: RwLock<bool>,
+    // Last Screen Render Time
+    last_render: RwLock<u128>,
 
     // The Entities in the World
     _entities: Vec<usize>,
@@ -280,6 +292,7 @@ impl World {
 
         Self {
             running: RwLock::new(true),
+            last_render: RwLock::new(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()),
             _entities: entity_list,
             living_entities: Arc::new(RwLock::new(0)),
             positions: Arc::new(RwLock::new(positions)),
