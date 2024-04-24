@@ -285,8 +285,8 @@ impl World {
             positions.push(random::<Option<(isize, isize)>>());
             velocities.push(if random() { Some((0, 0)) } else { None });
             accelerations.push(if random() { Some((0, 0)) } else { None });
-            alives.push(Some(random()));
-            healths.push(if random() { Some(random::<usize>() % 100) } else { None });
+            alives.push(Some(true));
+            healths.push(Some(random::<usize>() % 100));
             health_changes.push(None);
         }
 
