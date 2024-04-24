@@ -9,3 +9,7 @@ When testing on an i7 mac I was between 20-35 milliseconds between frame renders
 ## Interesting Behavior
 
 The particles seem to swarm the center of the screen in the beginning and then rush to the edges with a few particles making journeys through the middle of the area.
+
+## Pictures
+
+![Running](./docs/ExampleRun.png)
