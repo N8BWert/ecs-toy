@@ -2,8 +2,9 @@
 //! Toy Entity Component System using various methods to schedule systems
 //! 
 
-use std::sync::{Arc, RwLock, atomic::{AtomicBool, Ordering}};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{io::Stdout, sync::{Arc, RwLock}};
+use std::io::{stdout, Result};
+use std::time::Duration;
 
 use clap::Parser;
 
@@ -11,15 +12,26 @@ use threadpool::ThreadPool;
 
 use rand::random;
 
-use colored::Colorize;
+use crossterm::{
+    event::{self, KeyCode, KeyEventKind},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, EnterAlternateScreen,
+        LeaveAlternateScreen
+    },
+    ExecutableCommand,
+};
+use ratatui::{
+    prelude::*,
+    widgets::{canvas::Canvas, Block, Borders},
+};
 
-const WIDTH: isize = 200;
-const MIN_X: isize = -100;
-const MAX_X: isize = 99;
+const WIDTH: isize = 212;
+const MIN_X: isize = -106;
+const MAX_X: isize = 105;
 
-const HEIGHT: isize = 11;
-const MIN_Y: isize = -5;
-const MAX_Y: isize = 5;
+const HEIGHT: isize = 50;
+const MIN_Y: isize = -25;
+const MAX_Y: isize = 24;
 
 const MAX_HEALTH: usize = 10;
 
@@ -96,19 +108,41 @@ fn health_update_system(
 /// Print the canvas to the screen
 fn canvas_render_system(
     world: Arc<World>,
-) {
-    let canvas = world.canvas.read().unwrap();
-    for row in canvas.iter() {
-        for item in row {
-            match *item {
-                Status::Dead => print!("{}", "_".black()),
-                Status::Low => print!("{}", "X".red()),
-                Status::Medium => print!("{}", "X".yellow()),
-                Status::High => print!("{}", "X".green()),
-            }
-        }
-        print!("\n");
-    }
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+) -> Result<()> {
+    terminal.draw(|frame| {
+        let area = frame.size();
+        frame.render_widget(
+            Canvas::default()
+                .block(
+                    Block::default()
+                    .borders(Borders::ALL)
+                    .title(
+                        format!(
+                            "Living Entities: {}",
+                            (*world.living_entities.read().unwrap()))
+                        )
+                    )
+                .background_color(Color::Black)
+                .x_bounds([0.0, WIDTH as f64])
+                .y_bounds([0.0, HEIGHT as f64])
+                .paint(|ctx| {
+                let canvas = world.canvas.read().unwrap();
+                for (y, row) in canvas.iter().enumerate() {
+                    for (x, item) in row.iter().enumerate() {
+                        match *item {
+                            Status::Dead => ctx.print(x as f64, y as f64, "_".gray()),
+                            Status::Low => ctx.print(x as f64, y as f64, "X".red()),
+                            Status::Medium => ctx.print(x as f64, y as f64, "X".yellow()),
+                            Status::High => ctx.print(x as f64, y as f64, "X".green()),
+                        }
+                    }
+                }
+            }),
+            area,
+        );
+    })?;
+    Ok(())
 }
 
 /// Update the accelerations randomly
@@ -179,10 +213,27 @@ fn alive_entities_display_system(
     (*world.living_entities.write().unwrap()) = total_alive;
 }
 
+/// User Input System
+fn user_input_system(
+    world: Arc<World>,
+) {
+    if event::poll(Duration::from_millis(5)).unwrap() {
+        if let event::Event::Key(key) = event::read().unwrap() {
+            if key.kind == KeyEventKind::Press &&
+                key.code == KeyCode::Char('q') {
+                (*world.running.write().unwrap()) = false;
+            }
+        }
+    }
+}
+
 /// Entity Component System
 pub struct World {
+    // Whether the simulation is running
+    running: RwLock<bool>,
+
     // The Entities in the World
-    entities: Vec<usize>,
+    _entities: Vec<usize>,
     // Number of living entities
     living_entities: Arc<RwLock<usize>>,
 
@@ -228,7 +279,8 @@ impl World {
         }
 
         Self {
-            entities: entity_list,
+            running: RwLock::new(true),
+            _entities: entity_list,
             living_entities: Arc::new(RwLock::new(0)),
             positions: Arc::new(RwLock::new(positions)),
             velocities: Arc::new(RwLock::new(velocities)),
@@ -257,18 +309,18 @@ struct Args {
     log_living: bool,
 }
 
-fn main() {
+fn main() -> Result<()> {
     let args = Args::parse();
 
     let world = Arc::new(World::new(args.entities));
     let pool = ThreadPool::new(args.workers);
 
     let systems = vec![
+        user_input_system,
         position_update_system,
         velocity_update_system,
         component_render_system,
         health_update_system,
-        canvas_render_system,
         acceleration_update_system,
         alive_system,
         health_changes_system,
@@ -276,38 +328,41 @@ fn main() {
     ];
     let systems_len = systems.len();
 
-    println!("Running World With {} Entities", world.entities.len());
+    stdout().execute(EnterAlternateScreen)?;
+    enable_raw_mode()?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+    terminal.clear()?;
 
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
+    while *world.running.read().unwrap() {
+        // Draw UI
+        canvas_render_system(world.clone(), &mut terminal)?;
 
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::SeqCst);
-    }).expect("Error setting Ctrl-C handler");
-
-    while running.load(Ordering::SeqCst) {
-        let start_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+        // Handle Events
         for i in 0..systems_len {
             let c_world = world.clone();
             let f = systems[i];
             pool.execute(move || f(c_world));
         }
-    
+
         pool.join();
-        let end_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-
-        println!("Loop took {} ms ... {} Entities Remain", end_time - start_time, world.living_entities.read().unwrap());
     }
 
-    for (i, _) in world.alives.read().unwrap().iter().filter(|v| v.is_some() && v.unwrap()).enumerate() {
-        println!(
-            "Entity {{ id: {}, position: {:?}, velocity: {:?}, acceleration: {:?}, alive: true, health: {:?}, health_changes: {:?} }}",
-            i,
-            world.positions.read().unwrap()[i],
-            world.velocities.read().unwrap()[i],
-            world.accelerations.read().unwrap()[i],
-            world.healths.read().unwrap()[i],
-            world.health_changes.read().unwrap()[i],
-        );
+    stdout().execute(LeaveAlternateScreen)?;
+    disable_raw_mode()?;
+
+    if args.log_living {
+        for (i, _) in world.alives.read().unwrap().iter().filter(|v| v.is_some() && v.unwrap()).enumerate() {
+            println!(
+                "Entity {{ id: {}, position: {:?}, velocity: {:?}, acceleration: {:?}, alive: true, health: {:?}, health_changes: {:?} }}",
+                i,
+                world.positions.read().unwrap()[i],
+                world.velocities.read().unwrap()[i],
+                world.accelerations.read().unwrap()[i],
+                world.healths.read().unwrap()[i],
+                world.health_changes.read().unwrap()[i],
+            );
+        }
     }
+
+    Ok(())
 }
