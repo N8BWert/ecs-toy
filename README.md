@@ -12,4 +12,4 @@ The particles seem to swarm the center of the screen in the beginning and then r
 
 ## Pictures
 
-![Running](./docs/ExampleRun.png)
+![Running](./docs/ExampleRunRatatui.png)
